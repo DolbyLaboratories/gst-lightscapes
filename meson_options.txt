@@ -1,0 +1,2 @@
+option('lsm', type : 'feature', value : 'enabled', description : 'LSM plugins for parsing, decoding, and rendering.', yield : true)
+option('lsm_sink', type : 'feature', value : 'enabled', description : 'LSM plugins for driving physical lights', yield : true)

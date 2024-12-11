@@ -1,0 +1,89 @@
+From 71171b88f0559b03aa47deac09c8ac554dbcd4ff Mon Sep 17 00:00:00 2001
+From: BH Cho <support@dolby.com>
+Date: Fri, 1 Nov 2024 10:44:01 +1100
+Subject: [PATCH] Add URIM metadata support to qtdemux
+
+---
+ .../gst-plugins-good/gst/isomp4/fourcc.h      |  1 +
+ .../gst-plugins-good/gst/isomp4/qtdemux.c     | 40 +++++++++++++++++++
+ .../gst/isomp4/qtdemux_types.c                |  1 +
+ 3 files changed, 42 insertions(+)
+
+diff --git a/subprojects/gst-plugins-good/gst/isomp4/fourcc.h b/subprojects/gst-plugins-good/gst/isomp4/fourcc.h
+index c17dbe0956..325c50291c 100644
+--- a/subprojects/gst-plugins-good/gst/isomp4/fourcc.h
++++ b/subprojects/gst-plugins-good/gst/isomp4/fourcc.h
+@@ -445,6 +445,7 @@ G_BEGIN_DECLS
+ #define FOURCC_adrm     GST_MAKE_FOURCC('a','d','r','m')
+ 
+ #define FOURCC_metx     GST_MAKE_FOURCC('m','e','t','x')
++#define FOURCC_urim     GST_MAKE_FOURCC('u','r','i','m')
+ 
+ /* ONVIF Export File Format */
+ #define FOURCC_cstb     GST_MAKE_FOURCC('c','s','t','b')
+diff --git a/subprojects/gst-plugins-good/gst/isomp4/qtdemux.c b/subprojects/gst-plugins-good/gst/isomp4/qtdemux.c
+index 7986a691be..b8f18eebdd 100644
+--- a/subprojects/gst-plugins-good/gst/isomp4/qtdemux.c
++++ b/subprojects/gst-plugins-good/gst/isomp4/qtdemux.c
+@@ -16348,6 +16348,46 @@ qtdemux_meta_caps (GstQTDemux * qtdemux, QtDemuxStream * stream,
+ 
+       break;
+     }
++    case FOURCC_urim:{
++      gsize size = QT_UINT32 (stsd_entry_data);
++      GstByteReader reader = GST_BYTE_READER_INIT (stsd_entry_data, size);
++      const gchar *uri;
++      guint8 *urii_buf = NULL;
++
++      if (!gst_byte_reader_skip (&reader, 8 + 6 + 2 + 4 + 8)) {
++        GST_WARNING_OBJECT (qtdemux, "Too short urim sample entry");
++        break;
++      }
++
++      if (!gst_byte_reader_get_string_utf8 (&reader, &uri)) {
++        GST_WARNING_OBJECT (qtdemux, "Too short urim sample entry");
++        break;
++      }
++
++      _codec ("Timed Binary Metadata");
++      guint size_remaining = gst_byte_reader_get_remaining(&reader);
++
++      if (size_remaining == 0) {
++        caps =
++            gst_caps_new_simple ("application/octet-stream",
++                                 "uri", G_TYPE_STRING, uri,
++                                 NULL);
++      } else {
++        if (!(gst_byte_reader_dup_data(&reader, size_remaining, &urii_buf))) {
++          GST_WARNING_OBJECT (qtdemux, "Unable to duplicate urim data");
++          break;
++        }
++
++        GstBuffer *init_box = gst_buffer_new_wrapped(urii_buf, size_remaining);
++        caps =
++            gst_caps_new_simple ("application/octet-stream",
++                                 "uri", G_TYPE_STRING, uri,
++                                 "uri-init-box", GST_TYPE_BUFFER, init_box,
++                                 NULL);
++        gst_buffer_unref (init_box);
++      }
++      break;
++    }
+     default:
+       break;
+   }
+diff --git a/subprojects/gst-plugins-good/gst/isomp4/qtdemux_types.c b/subprojects/gst-plugins-good/gst/isomp4/qtdemux_types.c
+index f6dc28f36f..42d4ee50dd 100644
+--- a/subprojects/gst-plugins-good/gst/isomp4/qtdemux_types.c
++++ b/subprojects/gst-plugins-good/gst/isomp4/qtdemux_types.c
+@@ -248,6 +248,7 @@ static const QtNodeType qt_node_types[] = {
+   {FOURCC_adrm, "AAX DRM key data", 0},
+   {FOURCC_vttc, "VTTCueBox 14496-30", QT_FLAG_CONTAINER},
+   {FOURCC_metx, "XML MetaData Sample Entry", 0},
++  {FOURCC_urim, "URI Metadata Sample Entry", 0},
+   {FOURCC_cstb, "Correct Start Time Box", 0},
+   {0, "unknown", 0,},
+ };
+-- 
+2.40.1
+

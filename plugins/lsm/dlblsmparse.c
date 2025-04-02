@@ -47,7 +47,7 @@ static GstStaticPadTemplate dlb_lsm_parse_src_template =
         " lsm-version = (int) { 0 }, "
         " max-objects = (int) [ 1, 255 ], "
         " frame-period = (int) { 40000 }, "
-        " color-space = (int) { 0 }; ")
+        " color-space = (int) { 0, 1 }; ")
     );
 
 static GstStaticPadTemplate dlb_lsm_parse_sink_template =

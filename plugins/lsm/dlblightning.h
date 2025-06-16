@@ -33,6 +33,8 @@ G_BEGIN_DECLS
 typedef struct _DlbLightning DlbLightning;
 typedef struct _DlbLightningClass DlbLightningClass;
 
+#define MAX_NUM_PERSONALIZATION_ZONES (8)
+
 struct _DlbLightning
 {
   GstBaseTransform base_lightning;
@@ -44,6 +46,11 @@ struct _DlbLightning
 
   /* config */
   gchar *config_path;
+  
+  /* runtime parameters */
+  float     a_zone_immersion_levels[MAX_NUM_PERSONALIZATION_ZONES];
+  int       a_zone_low_immersion[MAX_NUM_PERSONALIZATION_ZONES];
+  float     global_lightness;
 };
 
 struct _DlbLightningClass

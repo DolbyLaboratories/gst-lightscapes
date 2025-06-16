@@ -29,7 +29,7 @@ typedef struct dlb_lightscapes_dispatch_table_s
 {
   dlb_lsr *   (*new) (const dlb_lsr_init_info *info);
   void        (*free) (dlb_lsr *self);
-  void        (*process) (dlb_lsr *self, size_t inbuf_size, unsigned char *inbuf, size_t *outbuf_size, unsigned char *outbuf);
+  void        (*process) (dlb_lsr *self, size_t inbuf_size, unsigned char *inbuf, size_t *outbuf_size, unsigned char *outbuf, float *a_zone_immersion_levels, int *a_zone_low_immersion, float global_lightness);
   void        (*reset) (dlb_lsr *self);
   size_t      (*get_max_output_size) (dlb_lsr *self);
 } dlb_lightscapes_dispatch_table;
@@ -65,9 +65,9 @@ dlb_lsr_free (dlb_lsr * self)
 }
 
 void
-dlb_lsr_process (dlb_lsr * self, size_t inbuf_size, unsigned char *inbuf, size_t *outbuf_size, unsigned char *outbuf)
+dlb_lsr_process (dlb_lsr * self, size_t inbuf_size, unsigned char *inbuf, size_t *outbuf_size, unsigned char *outbuf, float *a_zone_immersion_levels, int *a_zone_low_immersion, float global_lightness)
 {
-  dispatch_table.process (self, inbuf_size, inbuf, outbuf_size, outbuf);
+  dispatch_table.process (self, inbuf_size, inbuf, outbuf_size, outbuf, a_zone_immersion_levels, a_zone_low_immersion, global_lightness);
 }
 
 void

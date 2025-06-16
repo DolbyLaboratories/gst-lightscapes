@@ -52,7 +52,10 @@ void        dlb_lsr_process             (dlb_lsr  *self
                                         ,size_t inbuf_size
                                         ,unsigned char *inbuf
                                         ,size_t *outbuf_size
-                                        ,unsigned char *outbuf);
+                                        ,unsigned char *outbuf
+                                        ,float *a_zone_immersion_levels
+                                        ,int *a_zone_low_immersion
+                                        ,float global_lightness);
 void        dlb_lsr_reset               (dlb_lsr *self);
 
 size_t      dlb_lsr_get_max_output_size (dlb_lsr *self);

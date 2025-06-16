@@ -60,6 +60,9 @@ enum
 {
   PROP_0,
   PROP_CONFIG,
+  PROP_LIGHTNESS,
+  PROP_ZONE_IMMERSION_LEVEL,
+  PROP_ZONE_LOW_IMMERSION,
 };
 
 /* pad templates */
@@ -122,6 +125,25 @@ dlb_lightning_class_init (DlbLightningClass * klass)
           "Serialized Lightscapes configuration file", NULL,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT |
           GST_PARAM_MUTABLE_PLAYING));
+  
+  g_object_class_install_property (gobject_class, PROP_LIGHTNESS,
+      g_param_spec_float ("lightness", "Global lightness", "Global lightness value", 0.0, 1.0, 1.0,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT |
+          GST_PARAM_MUTABLE_PLAYING));
+  
+  g_object_class_install_property (gobject_class, PROP_ZONE_IMMERSION_LEVEL,
+      gst_param_spec_array ("zone-immersion-levels", "Immersion",
+          "Personalisation zone immersion level (0-1)",
+          g_param_spec_int ("zone-immersion-levels", "zones", "zones", 0, 100, 100, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT |
+          GST_PARAM_MUTABLE_PLAYING));
+  
+  g_object_class_install_property (gobject_class, PROP_ZONE_LOW_IMMERSION,
+      gst_param_spec_array ("zone-low-immersions", "Immersion",
+          "Personalisation zone immersion high (0) or low (1)",
+          g_param_spec_int ("zone-low-immersions", "zones", "zones", 0, 1, 1, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT |
+          GST_PARAM_MUTABLE_PLAYING));
 }
 
 static void
@@ -136,6 +158,40 @@ dlb_lightning_init (DlbLightning * lightning)
   lightning->renderer_config.max_num_objs = 0;
   lightning->renderer_config.max_num_md = 0;
   lightning->max_output_size = 0;
+  
+  lightning->global_lightness = 1.0f;
+  for (unsigned i = 0; i < MAX_NUM_PERSONALIZATION_ZONES; i++) {
+    lightning->a_zone_immersion_levels[i] = 1.0f;
+    lightning->a_zone_low_immersion[i] = 0;
+  }
+}
+
+static void
+dlb_lightning_set_low_immersion (DlbLightning * lightning, const GValue * value)
+{
+  guint nb_entries = gst_value_array_get_size(value);
+  if (nb_entries > MAX_NUM_PERSONALIZATION_ZONES)
+  {
+      g_warning ("Too many immersion zones specified (max %u)", MAX_NUM_PERSONALIZATION_ZONES);
+      return;
+  }
+  for (unsigned i = 0; i < MAX_NUM_PERSONALIZATION_ZONES && i < nb_entries; i++) {
+    lightning->a_zone_low_immersion[i] = g_value_get_int(gst_value_array_get_value (value, i));
+  }
+}
+
+static void
+dlb_lightning_set_immersion_levels (DlbLightning * lightning, const GValue * value)
+{
+  guint nb_entries = gst_value_array_get_size(value);
+  if (nb_entries > MAX_NUM_PERSONALIZATION_ZONES)
+  {
+      g_warning ("Too many immersion zones specified (max %u)", MAX_NUM_PERSONALIZATION_ZONES);
+      return;
+  }
+  for (unsigned i = 0; i < MAX_NUM_PERSONALIZATION_ZONES && i < nb_entries; i++) {
+    lightning->a_zone_immersion_levels[i] = ((float)g_value_get_int(gst_value_array_get_value (value, i))) / 100.0f;
+  }
 }
 
 void
@@ -145,7 +201,7 @@ dlb_lightning_set_property (GObject * object, guint property_id,
   DlbLightning *lightning = DLB_LIGHTNING (object);
   gboolean reneg = FALSE;
 
-  GST_DEBUG_OBJECT (lightning, "set_property");
+  GST_DEBUG_OBJECT (lightning, "set_property %u", property_id);
   GST_OBJECT_LOCK (lightning);
 
   switch (property_id) {
@@ -154,6 +210,15 @@ dlb_lightning_set_property (GObject * object, guint property_id,
         g_free (lightning->config_path);
       lightning->config_path = g_strdup (g_value_get_string (value));
       reneg = TRUE;
+      break;
+    case PROP_LIGHTNESS:
+      lightning->global_lightness = g_value_get_float (value);
+      break;
+    case PROP_ZONE_IMMERSION_LEVEL:
+      dlb_lightning_set_immersion_levels (lightning, value);
+      break;
+    case PROP_ZONE_LOW_IMMERSION:
+      dlb_lightning_set_low_immersion (lightning, value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -180,6 +245,12 @@ dlb_lightning_get_property (GObject * object, guint property_id,
   switch (property_id) {
     case PROP_CONFIG:
       g_value_set_string (value, lightning->config_path);
+      break;
+    case PROP_LIGHTNESS:
+      g_value_set_float (value, lightning->global_lightness);
+      break;
+    case PROP_ZONE_IMMERSION_LEVEL:
+    case PROP_ZONE_LOW_IMMERSION:
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -312,7 +383,7 @@ dlb_lightning_transform (GstBaseTransform * trans, GstBuffer * inbuf,
 
   gst_buffer_map (outbuf, &outbuf_map, GST_MAP_READWRITE);
   gsize outsize = outbuf_map.size;
-  dlb_lsr_process (lightning->renderer_instance, inbuf_map.size, inbuf_map.data, &outsize, outbuf_map.data);
+  dlb_lsr_process (lightning->renderer_instance, inbuf_map.size, inbuf_map.data, &outsize, outbuf_map.data, lightning->a_zone_immersion_levels, lightning->a_zone_low_immersion, lightning->global_lightness);
   GST_DEBUG_OBJECT(lightning, "Output buffer size %ld", outsize);
 
   gst_buffer_resize (outbuf, 0, outsize);

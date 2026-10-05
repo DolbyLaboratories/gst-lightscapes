@@ -1,0 +1,3 @@
+option('lsm', type : 'feature', value : 'enabled', description : 'LSM plugins for parsing, decoding, and rendering.', yield : true)
+option('lsm_sink', type : 'feature', value : 'enabled', description : 'LSM plugins for driving physical lights', yield : true)
+option('light_drivers', type : 'feature', value : 'enabled', description : 'Physical light driver sinks (FTDI); needs dlb_light_drivers + FTDI libs. Disable on platforms without FTDI support (e.g. the Windows CI runner).', yield : true)

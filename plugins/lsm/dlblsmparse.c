@@ -1,7 +1,7 @@
 /*******************************************************************************
 
- * Dolby Lightscapes GStreamer Plugins
- * Copyright (C) 2024, Dolby Laboratories
+ * Lightscapes GStreamer Plugins
+ * Copyright (C) 2024-2026, Dolby Laboratories
 
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -44,17 +44,27 @@ static GstStaticPadTemplate dlb_lsm_parse_src_template =
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS ("application/x-lsm, parsed = (boolean) true, "
-        " lsm-version = (int) { 0 }, "
+        " lsm-version = (int) { 1 }, "
         " max-objects = (int) [ 1, 255 ], "
-        " frame-period = (int) { 40000 }, "
-        " color-space = (int) { 0, 1 }; ")
+        " frame-period = (int) [ 1, 1000000 ], "
+        " color-space = (int) { 0, 1 }, "
+        " lscp-profile = (int) [ 0, 15 ], "
+        " lscp-level = (int) [ 0, 15 ]; ")
     );
 
 static GstStaticPadTemplate dlb_lsm_parse_sink_template =
     GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("application/octet-stream, uri = (string) { urn:oid:1.2.6.1.4.6729.1.3 }; ")
+    GST_STATIC_CAPS ("application/octet-stream, uri = (string) { urn:oid:1.2.6.1.4.6729.1.3 }, "
+        " es_version = (int) { 1 }, "
+        " frame_period = (int) [ 1, 1000 ], "
+        " max_objects = (int) [ 1, 255 ], "
+        " colour_type = (string) { nclx, rICC, prof }, "
+        " colour_primaries = (int) { 9 }, "
+        " transfer_characteristics = (int) {15, 16 }, "
+        " matrix_coefficients = (int) { 9 }, "
+        " full_range = (boolean) false; ")
     );
 
 
@@ -95,6 +105,8 @@ dlb_lsm_parse_init (DlbLsmParse * lsm_parse)
 
   lsm_parse->caps_parsed = FALSE;
   lsm_parse->max_objects = 0;
+  lsm_parse->profile = 0;
+  lsm_parse->level = 1;
 }
 
 static gboolean
@@ -106,6 +118,8 @@ dlb_lsm_parse_start (GstBaseParse * parse)
 
   lsm_parse->caps_parsed = FALSE;
   lsm_parse->max_objects = 0;
+  lsm_parse->profile = 0;
+  lsm_parse->level = 1;
 
 //  gst_base_parse_set_min_frame_size(parse, 24);
 //  gst_base_parse_set_has_timing_info(parse, TRUE);
@@ -132,58 +146,183 @@ static int check_caps(GstBaseParse * parse)
     GstCaps *sink_caps = gst_pad_get_current_caps (GST_BASE_PARSE_SINK_PAD (parse));
 
     if (sink_caps) {
-      GST_INFO_OBJECT (parse, "sink caps %" GST_PTR_FORMAT, sink_caps);
-      GstStructure *s = gst_caps_get_structure (sink_caps, 0);
+        GST_INFO_OBJECT (parse, "sink caps %" GST_PTR_FORMAT, sink_caps);
+        GstStructure *s = gst_caps_get_structure (sink_caps, 0);
 
-      if (gst_structure_has_field (s, "uri-init-box")) {
-          const GValue *uri_init_box = gst_structure_get_value (s, "uri-init-box");
+        if (gst_structure_has_field (s, "lscc-box") && gst_structure_has_field (s, "colr-box") &&  gst_structure_has_field (s, "btrt-box")) {
+            guint8                version;
+            guint8                color_space;
+            guint8                box_version = 0;
+            guint32               frame_period_ms;
 
-          if (GST_VALUE_HOLDS_BUFFER (uri_init_box)) {
-              GST_DEBUG_OBJECT (lsm_parse, "Found URI init box");
-              GstBuffer *init_box_buf = gst_value_get_buffer (uri_init_box);
-              GstMapInfo map;
-              GstByteReader reader;
+            const GValue *lscc_box = gst_structure_get_value (s, "lscc-box");
+            if (GST_VALUE_HOLDS_BUFFER (lscc_box)) {
+                GST_DEBUG_OBJECT (lsm_parse, "Found 'lscc' box");
+                GstBuffer *lscc_box_buf = gst_value_get_buffer (lscc_box);
+                GstMapInfo map;
+                GstByteReader reader;
+                gst_buffer_map (lscc_box_buf, &map, GST_MAP_READ);
+                gst_byte_reader_init (&reader, map.data, map.size);
+                /* FullBox layout: [0..3] size, [4..7] type, [8] version, [9..11] flags */
+                if (gst_byte_reader_skip(&reader, 8) &&
+                    gst_byte_reader_get_uint8(&reader, &box_version) &&
+                    gst_byte_reader_skip(&reader, 3) &&
+                    gst_byte_reader_get_uint32_be(&reader, &frame_period_ms) &&
+                    gst_byte_reader_get_uint8(&reader, &lsm_parse->max_objects) &&
+                    gst_byte_reader_get_uint8(&reader, &version)) {
+                        if (box_version != 0) {
+                            GST_ERROR_OBJECT (lsm_parse, "lscc FullBox version %d is not supported (expected 0)", box_version);
+                            gst_buffer_unmap (lscc_box_buf, &map);
+                            return 3;
+                        }
+                        if (version != 1) {
+                            GST_ERROR_OBJECT (lsm_parse, "LSM bitstream es_version %d is not supported (expected 1)", version);
+                            gst_buffer_unmap (lscc_box_buf, &map);
+                            return 3;
+                        }
+                        GST_DEBUG_OBJECT (lsm_parse, "frame_period %d ms (%d us)", frame_period_ms, frame_period_ms * 1000);
+                        GST_DEBUG_OBJECT (lsm_parse, "max_objects %d", lsm_parse->max_objects);
+                        GST_DEBUG_OBJECT (lsm_parse, "es_version %d", version);
+                }
+                gst_buffer_unmap (lscc_box_buf, &map);
+            }
+            const GValue *colr_box = gst_structure_get_value (s, "colr-box");
+            if (GST_VALUE_HOLDS_BUFFER (colr_box)) {
+                GST_DEBUG_OBJECT (lsm_parse, "Found 'colr' box");
+                GstBuffer *colr_box_buf = gst_value_get_buffer (colr_box);
+                GstMapInfo map;
+                GstByteReader reader;
+                gst_buffer_map (colr_box_buf, &map, GST_MAP_READ);
+                gst_byte_reader_init (&reader, map.data, map.size);
+                guint32 colour_type;
+                guint16 colour_primaries;
+                guint16 transfer_characteristics;
+                guint16 matrix_coefficients;
+                guint8 full_range_flag;
 
-              gst_buffer_map (init_box_buf, &map, GST_MAP_READ);
-              gst_byte_reader_init (&reader, map.data, map.size);
+                if (gst_byte_reader_skip(&reader, 8) &&
+                    gst_byte_reader_get_uint32_be(&reader, &colour_type) &&
+                    gst_byte_reader_get_uint16_be(&reader, &colour_primaries) &&
+                    gst_byte_reader_get_uint16_be(&reader, &transfer_characteristics) &&
+                    gst_byte_reader_get_uint16_be(&reader, &matrix_coefficients) &&
+                    gst_byte_reader_get_uint8(&reader, &full_range_flag)) {
+                        GST_DEBUG_OBJECT (lsm_parse, "color_type '%c%c%c%c'",(char)((colour_type >> 24) & 0xff),
+                                                                             (char)((colour_type >> 16) & 0xff),
+                                                                             (char)((colour_type >>  8) & 0xff),
+                                                                             (char)((colour_type      ) & 0xff));
+                        GST_DEBUG_OBJECT (lsm_parse, "color_primaries %d", colour_primaries);
+                        GST_DEBUG_OBJECT (lsm_parse, "transfer_characteristics %d", transfer_characteristics);
+                        GST_DEBUG_OBJECT (lsm_parse, "matrix_coefficients %d", matrix_coefficients);
+                        GST_DEBUG_OBJECT (lsm_parse, "full_range_flag %d", full_range_flag);
 
-              guint8                version;
-              guint8                color_space;
-              guint32               frame_period_ms;
+                        color_space = transfer_characteristics == 16 ? 1 : 0; /* 0=Rec.2020 linear, 1=Rec.2020 PQ*/
+                    }
+                gst_buffer_unmap (colr_box_buf, &map);
+            }
+            const GValue *btrt_box = gst_structure_get_value (s, "btrt-box");
+            if (GST_VALUE_HOLDS_BUFFER (btrt_box)) {
+                GST_DEBUG_OBJECT (lsm_parse, "Found 'btrt' box");
+                GstBuffer *btrt_box_buf = gst_value_get_buffer (btrt_box);
+                GstMapInfo map;
+                GstByteReader reader;
+                gst_buffer_map (btrt_box_buf, &map, GST_MAP_READ);
+                gst_byte_reader_init (&reader, map.data, map.size);
+                guint32 max_sample_size;
+                guint32 avg_bitrate;
+                guint32 max_bitrate;
 
-              if (gst_byte_reader_skip(&reader, 12) &&
-                  gst_byte_reader_get_uint8(&reader, &version) &&
-                  gst_byte_reader_get_uint32_be(&reader, &frame_period_ms) &&
-                  gst_byte_reader_get_uint8(&reader, &lsm_parse->max_objects) &&
-                  gst_byte_reader_get_uint8(&reader, (guint8*) &color_space)) {
-                  GST_DEBUG_OBJECT (lsm_parse, "LSM version %d", version);
-                  GST_DEBUG_OBJECT (lsm_parse, "Max objects %d", lsm_parse->max_objects);
-                  GST_DEBUG_OBJECT (lsm_parse, "Color space %d", color_space);
-                  GST_DEBUG_OBJECT (lsm_parse, "Frame period %d ms (%d us)", frame_period_ms, frame_period_ms * 1000);
+                if (gst_byte_reader_skip(&reader, 8) &&
+                    gst_byte_reader_get_uint32_be(&reader, &max_sample_size) &&
+                    gst_byte_reader_get_uint32_be(&reader, &avg_bitrate) &&
+                    gst_byte_reader_get_uint32_be(&reader, &max_bitrate)) {
+                        GST_DEBUG_OBJECT (lsm_parse, "max_sample_size %d bytes", max_sample_size);
+                        GST_DEBUG_OBJECT (lsm_parse, "avg_bitrate %d bits/s", avg_bitrate);
+                        GST_DEBUG_OBJECT (lsm_parse, "max_bitrate %d bits/s", max_bitrate);
+                }
+                gst_buffer_unmap (btrt_box_buf, &map);
+            }
 
-                  GstCaps *caps = gst_caps_new_simple ("application/x-lsm",
-                                                       "parsed", G_TYPE_BOOLEAN, TRUE,
-                                                       "lsm-version", G_TYPE_INT, version,
-                                                       "max-objects", G_TYPE_INT, lsm_parse->max_objects,
-                                                       "color-space", G_TYPE_INT, color_space,
-                                                       "frame-period", G_TYPE_INT, frame_period_ms * 1000,
-                                                       NULL);
+            gint lscp_profile_val = 0;
+            gint lscp_level_val = 1;
+            gst_structure_get_int (s, "lscp-profile", &lscp_profile_val);
+            gst_structure_get_int (s, "lscp-level", &lscp_level_val);
+            lsm_parse->profile = (guint8) lscp_profile_val;
+            lsm_parse->level = (guint8) lscp_level_val;
+            GST_DEBUG_OBJECT (lsm_parse, "lscp-profile %d, lscp-level %d",
+                lsm_parse->profile, lsm_parse->level);
 
-                  GST_INFO_OBJECT (parse, "src caps %" GST_PTR_FORMAT, caps);
-                  gst_base_parse_set_frame_rate(parse, 1000, frame_period_ms, 0, 0);
-                  gst_pad_set_caps (GST_BASE_PARSE_SRC_PAD (lsm_parse), caps);
-                  gst_caps_unref (caps);
-                  lsm_parse->caps_parsed = TRUE;
+            GstCaps *caps = gst_caps_new_simple ("application/x-lsm",
+                                            "parsed", G_TYPE_BOOLEAN, TRUE,
+                                            "lsm-version", G_TYPE_INT, version,
+                                            "max-objects", G_TYPE_INT, lsm_parse->max_objects,
+                                            "color-space", G_TYPE_INT, color_space,
+                                            "frame-period", G_TYPE_INT, frame_period_ms * 1000,
+                                            "lscp-profile", G_TYPE_INT, (gint) lsm_parse->profile,
+                                            "lscp-level", G_TYPE_INT, (gint) lsm_parse->level,
+                                            NULL);
 
-                  gst_buffer_unmap (init_box_buf, &map);
-                  return 0;
-              }
+            GST_INFO_OBJECT (parse, "src caps %" GST_PTR_FORMAT, caps);
+            gst_base_parse_set_frame_rate(parse, 1000, frame_period_ms, 0, 0);
+            gst_pad_set_caps (GST_BASE_PARSE_SRC_PAD (lsm_parse), caps);
+            gst_caps_unref (caps);
+            lsm_parse->caps_parsed = TRUE;
+            return 0;
+        }
 
-              GST_ERROR_OBJECT (lsm_parse, "URI init box is not big enough for LSM");
-              gst_buffer_unmap (init_box_buf, &map);
-              return 2;
-          }
-      }
+        if (gst_structure_has_field (s, "uri-init-box")) {
+            const GValue *uri_init_box = gst_structure_get_value (s, "uri-init-box");
+
+            if (GST_VALUE_HOLDS_BUFFER (uri_init_box)) {
+                GST_DEBUG_OBJECT (lsm_parse, "Found URI init box");
+                GstBuffer *init_box_buf = gst_value_get_buffer (uri_init_box);
+                GstMapInfo map;
+                GstByteReader reader;
+
+                gst_buffer_map (init_box_buf, &map, GST_MAP_READ);
+                gst_byte_reader_init (&reader, map.data, map.size);
+
+                guint8                version;
+                guint8                color_space;
+                guint32               frame_period_ms;
+
+                if (gst_byte_reader_skip(&reader, 12) &&
+                    gst_byte_reader_get_uint8(&reader, &version) &&
+                    gst_byte_reader_get_uint32_be(&reader, &frame_period_ms) &&
+                    gst_byte_reader_get_uint8(&reader, &lsm_parse->max_objects) &&
+                    gst_byte_reader_get_uint8(&reader, (guint8*) &color_space)) {
+                    if (version != 1) {
+                        GST_ERROR_OBJECT (lsm_parse, "LSM bitstream version %d is not supported (expected 1)", version);
+                        gst_buffer_unmap (init_box_buf, &map);
+                        return 3;
+                    }
+                    GST_DEBUG_OBJECT (lsm_parse, "LSM version %d", version);
+                    GST_DEBUG_OBJECT (lsm_parse, "Max objects %d", lsm_parse->max_objects);
+                    GST_DEBUG_OBJECT (lsm_parse, "Color space %d", color_space);
+                    GST_DEBUG_OBJECT (lsm_parse, "Frame period %d ms (%d us)", frame_period_ms, frame_period_ms * 1000);
+
+                    GstCaps *caps = gst_caps_new_simple ("application/x-lsm",
+                                                        "parsed", G_TYPE_BOOLEAN, TRUE,
+                                                        "lsm-version", G_TYPE_INT, version,
+                                                        "max-objects", G_TYPE_INT, lsm_parse->max_objects,
+                                                        "color-space", G_TYPE_INT, color_space,
+                                                        "frame-period", G_TYPE_INT, frame_period_ms * 1000,
+                                                        NULL);
+
+                    GST_INFO_OBJECT (parse, "src caps %" GST_PTR_FORMAT, caps);
+                    gst_base_parse_set_frame_rate(parse, 1000, frame_period_ms, 0, 0);
+                    gst_pad_set_caps (GST_BASE_PARSE_SRC_PAD (lsm_parse), caps);
+                    gst_caps_unref (caps);
+                    lsm_parse->caps_parsed = TRUE;
+
+                    gst_buffer_unmap (init_box_buf, &map);
+                    return 0;
+                }
+
+                GST_ERROR_OBJECT (lsm_parse, "URI init box is not big enough for LSM");
+                gst_buffer_unmap (init_box_buf, &map);
+                return 2;
+            }
+        }
     }
     return 1;
 }
@@ -200,7 +339,10 @@ dlb_lsm_parse_handle_frame (GstBaseParse * parse, GstBaseParseFrame * frame,
   GST_LOG_OBJECT (lsm_parse, "handle_frame");
 
   int caps_error = check_caps(parse);
-  if (caps_error) {
+  if (caps_error == 3) {
+      ret = GST_FLOW_ERROR;
+      goto done;
+  } else if (caps_error) {
       GST_ERROR_OBJECT (lsm_parse, "No valid metadata found to initialise LSM capabilities");
       *skipsize = (gint) 0;
       goto cleanup;
@@ -232,6 +374,7 @@ cleanup:
       ret = gst_base_parse_finish_frame (parse, frame, map.size);
   }
 
+done:
   return ret;
 }
 

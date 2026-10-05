@@ -1,7 +1,7 @@
 /*******************************************************************************
 
- * Dolby Lightscapes GStreamer Plugins
- * Copyright (C) 2024, Dolby Laboratories
+ * Lightscapes GStreamer Plugins
+ * Copyright (C) 2024-2026, Dolby Laboratories
 
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -37,6 +37,8 @@ struct _DlbLsmParse
     GstBaseParse    base_lsm_parse;
     gboolean        caps_parsed;
     guint8          max_objects;
+    guint8          profile;
+    guint8          level;
 };
 
 struct _DlbLsmParseClass

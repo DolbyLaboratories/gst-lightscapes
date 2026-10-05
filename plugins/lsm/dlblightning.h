@@ -1,7 +1,7 @@
 /*******************************************************************************
 
- * Dolby Lightscapes GStreamer Plugins
- * Copyright (C) 2024, Dolby Laboratories
+ * Lightscapes GStreamer Plugins
+ * Copyright (C) 2024-2026, Dolby Laboratories
 
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -46,11 +46,18 @@ struct _DlbLightning
 
   /* config */
   gchar *config_path;
-  
+
   /* runtime parameters */
-  float     a_zone_immersion_levels[MAX_NUM_PERSONALIZATION_ZONES];
-  int       a_zone_low_immersion[MAX_NUM_PERSONALIZATION_ZONES];
-  float     global_lightness;
+  float global_lightness;
+  float immersion_level;
+  int a_zone_low_immersion[MAX_NUM_PERSONALIZATION_ZONES];
+  float a_zone_brightness_level[MAX_NUM_PERSONALIZATION_ZONES];
+  float a_zone_saturation_level[MAX_NUM_PERSONALIZATION_ZONES];
+  float a_zone_smoothing[MAX_NUM_PERSONALIZATION_ZONES];
+
+  /* stream parameters from caps */
+  guint8 profile;
+  guint8 level;
 };
 
 struct _DlbLightningClass

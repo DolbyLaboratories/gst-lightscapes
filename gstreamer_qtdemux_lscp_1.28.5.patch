@@ -1,0 +1,299 @@
+diff --git a/subprojects/gst-plugins-good/gst/isomp4/fourcc.h b/subprojects/gst-plugins-good/gst/isomp4/fourcc.h
+index 18b3cc2f28..66477e6b36 100644
+--- a/subprojects/gst-plugins-good/gst/isomp4/fourcc.h
++++ b/subprojects/gst-plugins-good/gst/isomp4/fourcc.h
+@@ -464,6 +464,7 @@ G_BEGIN_DECLS
+ #define FOURCC_adrm     GST_MAKE_FOURCC('a','d','r','m')
+ 
+ #define FOURCC_metx     GST_MAKE_FOURCC('m','e','t','x')
++#define FOURCC_urim     GST_MAKE_FOURCC('u','r','i','m')
+ 
+ /* ONVIF Export File Format */
+ #define FOURCC_cstb     GST_MAKE_FOURCC('c','s','t','b')
+@@ -482,6 +483,10 @@ G_BEGIN_DECLS
+ #define FOURCC_mha1     GST_MAKE_FOURCC('m','h','a','1')
+ #define FOURCC_mhm1     GST_MAKE_FOURCC('m','h','m','1')
+ 
++/* Lightscapes */
++#define FOURCC_lumn     GST_MAKE_FOURCC('l','u','m','n')
++#define FOURCC_lscp     GST_MAKE_FOURCC('l','s','c','p')
++
+ G_END_DECLS
+ 
+ #endif /* __FOURCC_H__ */
+diff --git a/subprojects/gst-plugins-good/gst/isomp4/qtdemux.c b/subprojects/gst-plugins-good/gst/isomp4/qtdemux.c
+index f1ea652f4b..5b8d55b0bf 100644
+--- a/subprojects/gst-plugins-good/gst/isomp4/qtdemux.c
++++ b/subprojects/gst-plugins-good/gst/isomp4/qtdemux.c
+@@ -304,6 +304,13 @@ GST_STATIC_PAD_TEMPLATE ("meta_%u",
+     GST_PAD_SOMETIMES,
+     GST_STATIC_CAPS_ANY);
+ 
++    static GstStaticPadTemplate gst_qtdemux_lumnsrc_template =
++GST_STATIC_PAD_TEMPLATE ("lumn_%u",
++    GST_PAD_SRC,
++    GST_PAD_SOMETIMES,
++    GST_STATIC_CAPS_ANY);
++
++
+ #define gst_qtdemux_parent_class parent_class
+ G_DEFINE_TYPE (GstQTDemux, gst_qtdemux, GST_TYPE_ELEMENT);
+ GST_ELEMENT_REGISTER_DEFINE_WITH_CODE (qtdemux, "qtdemux",
+@@ -370,6 +377,10 @@ static GstCaps *qtdemux_sub_caps (GstQTDemux * qtdemux, QtDemuxStream * stream,
+ static GstCaps *qtdemux_meta_caps (GstQTDemux * qtdemux, QtDemuxStream * stream,
+     QtDemuxStreamStsdEntry * entry, guint32 fourcc, GNode * stsd_entry,
+     gchar ** codec_name);
++static GstCaps *qtdemux_illumination_caps (GstQTDemux * qtdemux, QtDemuxStream * stream,
++    QtDemuxStreamStsdEntry * entry, guint32 fourcc, GNode * stsd_entry,
++    gchar ** codec_name);
++
+ static GstCaps *qtdemux_generic_caps (GstQTDemux * qtdemux,
+     QtDemuxStream * stream, QtDemuxStreamStsdEntry * entry, guint32 fourcc,
+     GNode * stsd_entry, gchar ** codec_name);
+@@ -2106,6 +2117,8 @@ gst_qtdemux_reset (GstQTDemux * qtdemux, gboolean hard)
+     qtdemux->n_audio_streams = 0;
+     qtdemux->n_sub_streams = 0;
+     qtdemux->n_meta_streams = 0;
++    qtdemux->n_lumn_streams = 0;
++
+     qtdemux->exposed = FALSE;
+     qtdemux->fragmented = FALSE;
+     qtdemux->variant = VARIANT_NONE;
+@@ -10327,6 +10340,19 @@ gst_qtdemux_add_stream (GstQTDemux * qtdemux,
+       goto done;
+     }
+     qtdemux->n_meta_streams++;
++  } else if (stream->subtype == FOURCC_lumn) {
++    gchar *name = g_strdup_printf ("lumn_%u", qtdemux->n_lumn_streams);
++
++    stream->pad =
++        gst_pad_new_from_static_template (&gst_qtdemux_lumnsrc_template, name);
++    g_free (name);
++    if (!gst_qtdemux_configure_stream (qtdemux, stream)) {
++      gst_object_unref (stream->pad);
++      stream->pad = NULL;
++      ret = FALSE;
++      goto done;
++    }
++    qtdemux->n_lumn_streams++;
+   } else if (CUR_STREAM (stream)->caps) {
+     gchar *name = g_strdup_printf ("video_%u", qtdemux->n_video_streams);
+ 
+@@ -17484,9 +17510,27 @@ qtdemux_parse_trak (GstQTDemux * qtdemux, GNode * trak, guint32 * mvhd_matrix)
+       GST_INFO_OBJECT (qtdemux,
+           "type %" GST_FOURCC_FORMAT " caps %" GST_PTR_FORMAT,
+           GST_FOURCC_ARGS (fourcc), entry->caps);
++    } else if (stream->subtype == FOURCC_lumn) {
++       entry->sampled = TRUE;
++       entry->sparse = TRUE;
++       entry->caps =
++          qtdemux_illumination_caps (qtdemux, stream, entry, fourcc, stsd_entry,
++          &codec);
++        if (codec) {
++          gst_tag_list_add (stream->stream_tags, GST_TAG_MERGE_REPLACE,
++            GST_TAG_CODEC, codec, NULL);
++          g_free (codec);
++          codec = NULL;
++        }
++        GST_INFO_OBJECT (qtdemux,
++          "type %" GST_FOURCC_FORMAT " caps %" GST_PTR_FORMAT,
++          GST_FOURCC_ARGS (fourcc), entry->caps);
++
+     } else {
+       /* everything in 1 sample */
+       entry->sampled = TRUE;
++      GST_WARNING_OBJECT (qtdemux, "stream sub type %" GST_FOURCC_FORMAT,
++        GST_FOURCC_ARGS (stream->subtype));
+ 
+       entry->caps =
+           qtdemux_generic_caps (qtdemux, stream, entry, fourcc, stsd_entry,
+@@ -19991,6 +20035,68 @@ qtdemux_meta_caps (GstQTDemux * qtdemux, QtDemuxStream * stream,
+ 
+       break;
+     }
++    case FOURCC_urim:{
++      const guint8 *stsd_entry_data = stsd_entry->data;
++      gsize size = QT_UINT32 (stsd_entry_data);
++      GstByteReader reader = GST_BYTE_READER_INIT (stsd_entry_data, size);
++      const gchar *uri;
++      guint8 *urii_buf = NULL;
++      guint32 uri_box_size;
++
++
++      if (!gst_byte_reader_skip (&reader, 8 + 6 + 2)) {
++       GST_WARNING_OBJECT (qtdemux, "Too short urim sample entry");
++        break;
++      }
++
++      if (!gst_byte_reader_get_uint32_be(&reader, &uri_box_size)) {
++        GST_WARNING_OBJECT (qtdemux, "Too short urim sample entry");
++        break;
++      }
++      if (!gst_byte_reader_skip (&reader, 4 + 4)) {
++        GST_WARNING_OBJECT (qtdemux, "Too short urim sample entry");
++        break;
++      }
++
++      guint reader_position = gst_byte_reader_get_pos(&reader);
++
++      if (!gst_byte_reader_get_string_utf8 (&reader, &uri)) {
++        GST_WARNING_OBJECT (qtdemux, "Too short urim sample entry");
++        break;
++      }
++
++      guint reader_position2 = gst_byte_reader_get_pos(&reader);
++      if ((reader_position2 - reader_position) != (uri_box_size - 12)) {
++        GST_WARNING_OBJECT (qtdemux, "Box size indicated URI of size %u but get_string_utf8 read %u bytes", uri_box_size - 12, reader_position2 - reader_position);
++        break;
++      }
++
++      _codec ("Timed Binary Metadata");
++      guint size_remaining = gst_byte_reader_get_remaining(&reader);
++
++      if (size_remaining == 0) {
++        caps =
++            gst_caps_new_simple ("application/octet-stream",
++                                 "uri", G_TYPE_STRING, uri,
++                                 NULL);
++      } else {
++        guint32 uri_box_size;
++        if (!(gst_byte_reader_peek_uint32_be(&reader, &uri_box_size)) || !(gst_byte_reader_dup_data(&reader, uri_box_size, &urii_buf))) {
++          GST_WARNING_OBJECT (qtdemux, "Unable to duplicate urim data");
++          break;
++        }
++
++        GstBuffer *init_box = gst_buffer_new_wrapped(urii_buf, uri_box_size);
++        caps =
++            gst_caps_new_simple ("application/octet-stream",
++                                 "uri", G_TYPE_STRING, uri,
++                                 "uri-init-box", GST_TYPE_BUFFER, init_box,
++                                 NULL);
++        gst_buffer_unref (init_box);
++      }
++      break;
++    }
++
+     default:
+       break;
+   }
+@@ -20001,6 +20107,87 @@ qtdemux_meta_caps (GstQTDemux * qtdemux, QtDemuxStream * stream,
+   return caps;
+ }
+ 
++static GstCaps *
++qtdemux_illumination_caps (GstQTDemux * qtdemux, QtDemuxStream * stream,
++    QtDemuxStreamStsdEntry * entry, guint32 fourcc,
++    GNode * stsd_entry, gchar ** codec_name)
++{
++  GstCaps *caps;
++
++  switch (fourcc) {
++    case FOURCC_lscp:
++    {
++        const guint8 *stsd_entry_data = stsd_entry->data;
++        gsize size = QT_UINT32 (stsd_entry_data);
++        GstByteReader reader = GST_BYTE_READER_INIT (stsd_entry_data, size);
++
++        guint8 *lscc_buf = NULL;
++        guint8 *colr_buf = NULL;
++        guint8 *btrt_buf = NULL;
++
++        guint32 lscp_box_size;
++        guint32 lscc_box_size;
++        guint32 colr_box_size;
++        guint32 btrt_box_size;
++
++        /* skip lscp box */
++        if (!(gst_byte_reader_peek_uint32_be(&reader, &lscp_box_size)) || !(gst_byte_reader_skip (&reader,  8 + 1 + 3 + 4))) {
++          GST_WARNING_OBJECT (qtdemux, "Too short lscp sample entry");
++          break;
++        }
++        /* read lscc box */
++        if (!(gst_byte_reader_peek_uint32_be(&reader, &lscc_box_size)) || !(gst_byte_reader_dup_data(&reader, lscc_box_size, &lscc_buf))) {
++          GST_WARNING_OBJECT (qtdemux, "Unable to duplicate lscc data");
++          break;
++        }
++        /* Parse profilesLevelsIndication from lscc FullBox (present when flags & 0x01).
++         * lscc_buf layout: [0-3] size, [4-7] fourcc, [8] version, [9-11] flags, [12] pli.
++         * Defaults: profile=0 (Base Profile), level=1 (Level 1). */
++        guint8 lscp_profile = 0;
++        guint8 lscp_level = 1;
++        if (lscc_box_size >= 13 && (lscc_buf[11] & 0x01)) {
++          guint8 pli = lscc_buf[12];
++          lscp_profile = pli >> 4;
++          lscp_level = pli & 0x0F;
++        }
++        /* read colr box */
++        if (!(gst_byte_reader_peek_uint32_be(&reader, &colr_box_size)) || !(gst_byte_reader_dup_data(&reader, colr_box_size, &colr_buf))) {
++          GST_WARNING_OBJECT (qtdemux, "Unable to duplicate colr data");
++          break;
++        }
++        /* read btrt box */
++        if (!(gst_byte_reader_peek_uint32_be(&reader, &btrt_box_size)) || !(gst_byte_reader_dup_data(&reader, btrt_box_size, &btrt_buf))) {
++          GST_WARNING_OBJECT (qtdemux, "Unable to duplicate btrt data");
++          break;
++        }
++
++        GstBuffer *lscc_box = gst_buffer_new_wrapped(lscc_buf, lscc_box_size);
++        GstBuffer *colr_box = gst_buffer_new_wrapped(colr_buf, colr_box_size);
++        GstBuffer *btrt_box = gst_buffer_new_wrapped(btrt_buf, btrt_box_size);
++
++        caps =
++            gst_caps_new_simple ("application/octet-stream",
++                                 "lscc-box", GST_TYPE_BUFFER, lscc_box,
++                                 "colr-box", GST_TYPE_BUFFER, colr_box,
++                                 "btrt-box", GST_TYPE_BUFFER, btrt_box,
++                                 "lscp-profile", G_TYPE_INT, (gint) lscp_profile,
++                                 "lscp-level", G_TYPE_INT, (gint) lscp_level,
++                                 NULL);
++        gst_buffer_unref (lscc_box);
++        gst_buffer_unref (colr_box);
++        gst_buffer_unref (btrt_box);
++
++        _codec ("Timed Binary Metadata");
++        break;
++      }
++    default:
++      caps = NULL;
++      break;
++  }
++  return caps;
++}
++
++
+ static GstCaps *
+ qtdemux_generic_caps (GstQTDemux * qtdemux, QtDemuxStream * stream,
+     QtDemuxStreamStsdEntry * entry, guint32 fourcc,
+diff --git a/subprojects/gst-plugins-good/gst/isomp4/qtdemux.h b/subprojects/gst-plugins-good/gst/isomp4/qtdemux.h
+index 51a2a87580..81aa7c7efc 100644
+--- a/subprojects/gst-plugins-good/gst/isomp4/qtdemux.h
++++ b/subprojects/gst-plugins-good/gst/isomp4/qtdemux.h
+@@ -134,6 +134,7 @@ struct _GstQTDemux {
+   gint     n_audio_streams;
+   gint     n_sub_streams;
+   gint     n_meta_streams;
++  gint     n_lumn_streams;
+ 
+   GstFlowCombiner *flowcombiner;
+ 
+diff --git a/subprojects/gst-plugins-good/gst/isomp4/qtdemux_types.c b/subprojects/gst-plugins-good/gst/isomp4/qtdemux_types.c
+index 1bcac06f93..c788fc31c1 100644
+--- a/subprojects/gst-plugins-good/gst/isomp4/qtdemux_types.c
++++ b/subprojects/gst-plugins-good/gst/isomp4/qtdemux_types.c
+@@ -253,6 +253,7 @@ static const QtNodeType qt_node_types[] = {
+   {FOURCC_adrm, "AAX DRM key data", 0},
+   {FOURCC_vttc, "VTTCueBox 14496-30", QT_FLAG_CONTAINER},
+   {FOURCC_metx, "XML MetaData Sample Entry", 0},
++  {FOURCC_urim, "URI Metadata Sample Entry", 0},
+   {FOURCC_cstb, "Correct Start Time Box", 0},
+   {FOURCC_ipcm, "RAW Integer PCM", 0},
+   {FOURCC_fpcm, "RAW Float PCM", 0},
+@@ -261,6 +262,8 @@ static const QtNodeType qt_node_types[] = {
+   {FOURCC_mha1, "MPEG-H 3D Audio sample entry (mha1)", 0},
+   {FOURCC_mhm1, "MPEG-H 3D Audio sample entry (mhm1)", 0},
+   {FOURCC_mhaC, "MPEG-H 3D Audio Configuration Box", 0, qtdemux_dump_mhaC},
++  {FOURCC_lscp, "Lightscapes", 0},
++  {FOURCC_lumn, "illumination", 0, qtdemux_dump_unknown},
+   {0, "unknown", 0,},
+ };
+ 

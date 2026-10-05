@@ -1,7 +1,7 @@
 /*******************************************************************************
 
- * Dolby Lightscapes GStreamer Plugins
- * Copyright (C) 2024, Dolby Laboratories
+ * Lightscapes GStreamer Plugins
+ * Copyright (C) 2024-2026, Dolby Laboratories
 
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -29,9 +29,11 @@ typedef struct dlb_lightscapes_dispatch_table_s
 {
   dlb_lsr *   (*new) (const dlb_lsr_init_info *info);
   void        (*free) (dlb_lsr *self);
-  void        (*process) (dlb_lsr *self, size_t inbuf_size, unsigned char *inbuf, size_t *outbuf_size, unsigned char *outbuf, float *a_zone_immersion_levels, int *a_zone_low_immersion, float global_lightness);
+  void        (*process) (dlb_lsr *self, size_t inbuf_size, unsigned char *inbuf, size_t *outbuf_size, unsigned char *outbuf, float global_lightness, float immersion_level, int *a_zone_low_immersion, float *a_zone_brightness_level, float *a_zone_saturation_level, float *a_zone_smoothing);
   void        (*reset) (dlb_lsr *self);
   size_t      (*get_max_output_size) (dlb_lsr *self);
+  uint8_t     (*get_max_supported_profile) (void);
+  uint8_t     (*get_max_supported_level) (void);
 } dlb_lightscapes_dispatch_table;
 
 static dlb_lightscapes_dispatch_table dispatch_table;
@@ -48,6 +50,8 @@ dlb_lightscapes_try_open_dynlib (void)
   dispatch_table.process = get_proc_address (liblightscapes, "dlb_lsr_process");
   dispatch_table.reset = get_proc_address (liblightscapes, "dlb_lsr_reset");
   dispatch_table.get_max_output_size = get_proc_address (liblightscapes, "dlb_lsr_get_max_output_size");
+  dispatch_table.get_max_supported_profile = get_proc_address (liblightscapes, "dlb_lsr_get_max_supported_profile");
+  dispatch_table.get_max_supported_level = get_proc_address (liblightscapes, "dlb_lsr_get_max_supported_level");
 
   return 0;
 }
@@ -65,9 +69,9 @@ dlb_lsr_free (dlb_lsr * self)
 }
 
 void
-dlb_lsr_process (dlb_lsr * self, size_t inbuf_size, unsigned char *inbuf, size_t *outbuf_size, unsigned char *outbuf, float *a_zone_immersion_levels, int *a_zone_low_immersion, float global_lightness)
+dlb_lsr_process (dlb_lsr * self, size_t inbuf_size, unsigned char *inbuf, size_t *outbuf_size, unsigned char *outbuf, float global_lightness, float immersion_level, int *a_zone_low_immersion, float *a_zone_brightness_level, float *a_zone_saturation_level, float *a_zone_smoothing)
 {
-  dispatch_table.process (self, inbuf_size, inbuf, outbuf_size, outbuf, a_zone_immersion_levels, a_zone_low_immersion, global_lightness);
+  dispatch_table.process (self, inbuf_size, inbuf, outbuf_size, outbuf, global_lightness, immersion_level, a_zone_low_immersion, a_zone_brightness_level, a_zone_saturation_level, a_zone_smoothing);
 }
 
 void
@@ -80,4 +84,16 @@ size_t
 dlb_lsr_get_max_output_size (dlb_lsr * self)
 {
   return dispatch_table.get_max_output_size (self);
+}
+
+uint8_t
+dlb_lsr_get_max_supported_profile (void)
+{
+  return dispatch_table.get_max_supported_profile ();
+}
+
+uint8_t
+dlb_lsr_get_max_supported_level (void)
+{
+  return dispatch_table.get_max_supported_level ();
 }

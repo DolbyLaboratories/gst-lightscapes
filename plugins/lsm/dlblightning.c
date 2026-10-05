@@ -1,7 +1,7 @@
 /*******************************************************************************
 
- * Dolby Lightscapes GStreamer Plugins
- * Copyright (C) 2024, Dolby Laboratories
+ * Lightscapes GStreamer Plugins
+ * Copyright (C) 2024-2026, Dolby Laboratories
 
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -61,8 +61,13 @@ enum
   PROP_0,
   PROP_CONFIG,
   PROP_LIGHTNESS,
-  PROP_ZONE_IMMERSION_LEVEL,
+  PROP_IMMERSION_LEVEL,
   PROP_ZONE_LOW_IMMERSION,
+  PROP_ZONE_BRIGHTNESS_LEVEL,
+  PROP_ZONE_SATURATION_LEVEL,
+  PROP_ZONE_SMOOTHING,
+  PROP_MAX_SUPPORTED_PROFILE,
+  PROP_MAX_SUPPORTED_LEVEL,
 };
 
 /* pad templates */
@@ -79,10 +84,12 @@ static GstStaticPadTemplate dlb_lightning_sink_template =
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS ("application/x-lsm, parsed = (boolean) true, "
-        " lsm-version = (int) { 0 }, "
+        " lsm-version = (int) { 1 }, "
         " max-objects = (int) [ 1, 255 ], "
-        " frame-period = (int) { 40000 }, "
-        " color-space = (int) { 0, 1 }; ")
+        " frame-period = (int) [ 1, 1000000 ], "
+        " color-space = (int) { 0, 1 }, "
+        " lscp-profile = (int) [ 0, 15 ], "
+        " lscp-level = (int) [ 0, 15 ]; ")
     );
 
 /* class initialization */
@@ -107,7 +114,7 @@ dlb_lightning_class_init (DlbLightningClass * klass)
 
   gst_element_class_set_static_metadata (GST_ELEMENT_CLASS (klass),
       "Lightscapes renderer implementation", "Light",
-      "Plugin for rendering of Dolby Lightscapes",
+      "Plugin for rendering of Lightscapes",
       "Dolby Support <support@dolby.com>");
 
   gobject_class->set_property = GST_DEBUG_FUNCPTR (dlb_lightning_set_property);
@@ -125,25 +132,58 @@ dlb_lightning_class_init (DlbLightningClass * klass)
           "Serialized Lightscapes configuration file", NULL,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT |
           GST_PARAM_MUTABLE_PLAYING));
-  
+
   g_object_class_install_property (gobject_class, PROP_LIGHTNESS,
       g_param_spec_float ("lightness", "Global lightness", "Global lightness value", 0.0, 1.0, 1.0,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT |
           GST_PARAM_MUTABLE_PLAYING));
-  
-  g_object_class_install_property (gobject_class, PROP_ZONE_IMMERSION_LEVEL,
-      gst_param_spec_array ("zone-immersion-levels", "Immersion",
-          "Personalisation zone immersion level (0-1)",
-          g_param_spec_int ("zone-immersion-levels", "zones", "zones", 0, 100, 100, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
+
+  g_object_class_install_property (gobject_class, PROP_IMMERSION_LEVEL,
+      g_param_spec_float ("immersion-level", "Immersion level", "Global immersion level value", 0.0, 1.0, 1.0,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT |
           GST_PARAM_MUTABLE_PLAYING));
-  
+
   g_object_class_install_property (gobject_class, PROP_ZONE_LOW_IMMERSION,
-      gst_param_spec_array ("zone-low-immersions", "Immersion",
+      gst_param_spec_array ("zone-low-immersions", "Zone immersion",
           "Personalisation zone immersion high (0) or low (1)",
           g_param_spec_int ("zone-low-immersions", "zones", "zones", 0, 1, 1, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT |
           GST_PARAM_MUTABLE_PLAYING));
+
+  g_object_class_install_property (gobject_class, PROP_ZONE_BRIGHTNESS_LEVEL,
+      gst_param_spec_array ("zone-brightness-levels", "Zone brightness",
+          "Personalisation zone brightness level (0-1)",
+          g_param_spec_int ("zone-brightness-levels", "zones", "zones", 0, 100, 100, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT |
+          GST_PARAM_MUTABLE_PLAYING));
+
+  g_object_class_install_property (gobject_class, PROP_ZONE_SATURATION_LEVEL,
+      gst_param_spec_array ("zone-saturation-levels", "Zone saturation",
+          "Personalisation zone saturation level (0-1)",
+          g_param_spec_int ("zone-saturation-levels", "zones", "zones", 0, 100, 100, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT |
+          GST_PARAM_MUTABLE_PLAYING));
+
+  g_object_class_install_property (gobject_class, PROP_ZONE_SMOOTHING,
+      gst_param_spec_array ("zone-smoothing", "Zone smoothing",
+          "Personalisation zone smoothing level (0-100)",
+          g_param_spec_int ("zone-smoothing", "zones", "zones", 0, 100, 0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT |
+          GST_PARAM_MUTABLE_PLAYING));
+
+  g_object_class_install_property (gobject_class, PROP_MAX_SUPPORTED_PROFILE,
+      g_param_spec_uint ("max-supported-profile", "Max supported profile",
+          "Highest LSCP profile value supported by the renderer implementation "
+          "(a static capability, distinct from the stream-negotiated "
+          "lscp-profile caps field)", 0, G_MAXUINT, 0,
+          G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_MAX_SUPPORTED_LEVEL,
+      g_param_spec_uint ("max-supported-level", "Max supported level",
+          "Highest LSCP level value supported by the renderer implementation "
+          "(a static capability, distinct from the stream-negotiated "
+          "lscp-level caps field)", 0, G_MAXUINT, 0,
+          G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
 }
 
 static void
@@ -158,11 +198,14 @@ dlb_lightning_init (DlbLightning * lightning)
   lightning->renderer_config.max_num_objs = 0;
   lightning->renderer_config.max_num_md = 0;
   lightning->max_output_size = 0;
-  
+
   lightning->global_lightness = 1.0f;
+  lightning->immersion_level = 1.0f;
   for (unsigned i = 0; i < MAX_NUM_PERSONALIZATION_ZONES; i++) {
-    lightning->a_zone_immersion_levels[i] = 1.0f;
     lightning->a_zone_low_immersion[i] = 0;
+    lightning->a_zone_brightness_level[i] = 1.0f;
+    lightning->a_zone_saturation_level[i] = 1.0f;
+    lightning->a_zone_smoothing[i] = 0.0f;
   }
 }
 
@@ -181,7 +224,7 @@ dlb_lightning_set_low_immersion (DlbLightning * lightning, const GValue * value)
 }
 
 static void
-dlb_lightning_set_immersion_levels (DlbLightning * lightning, const GValue * value)
+dlb_lightning_set_brightness_levels (DlbLightning * lightning, const GValue * value)
 {
   guint nb_entries = gst_value_array_get_size(value);
   if (nb_entries > MAX_NUM_PERSONALIZATION_ZONES)
@@ -190,7 +233,35 @@ dlb_lightning_set_immersion_levels (DlbLightning * lightning, const GValue * val
       return;
   }
   for (unsigned i = 0; i < MAX_NUM_PERSONALIZATION_ZONES && i < nb_entries; i++) {
-    lightning->a_zone_immersion_levels[i] = ((float)g_value_get_int(gst_value_array_get_value (value, i))) / 100.0f;
+    lightning->a_zone_brightness_level[i] = ((float)g_value_get_int(gst_value_array_get_value (value, i))) / 100.0f;
+  }
+}
+
+static void
+dlb_lightning_set_saturation_levels (DlbLightning * lightning, const GValue * value)
+{
+  guint nb_entries = gst_value_array_get_size(value);
+  if (nb_entries > MAX_NUM_PERSONALIZATION_ZONES)
+  {
+      g_warning ("Too many immersion zones specified (max %u)", MAX_NUM_PERSONALIZATION_ZONES);
+      return;
+  }
+  for (unsigned i = 0; i < MAX_NUM_PERSONALIZATION_ZONES && i < nb_entries; i++) {
+    lightning->a_zone_saturation_level[i] = ((float)g_value_get_int(gst_value_array_get_value (value, i))) / 100.0f;
+  }
+}
+
+static void
+dlb_lightning_set_smoothing (DlbLightning * lightning, const GValue * value)
+{
+  guint nb_entries = gst_value_array_get_size(value);
+  if (nb_entries > MAX_NUM_PERSONALIZATION_ZONES)
+  {
+      g_warning ("Too many immersion zones specified (max %u)", MAX_NUM_PERSONALIZATION_ZONES);
+      return;
+  }
+  for (unsigned i = 0; i < MAX_NUM_PERSONALIZATION_ZONES && i < nb_entries; i++) {
+    lightning->a_zone_smoothing[i] = ((float)g_value_get_int(gst_value_array_get_value (value, i)));
   }
 }
 
@@ -214,11 +285,20 @@ dlb_lightning_set_property (GObject * object, guint property_id,
     case PROP_LIGHTNESS:
       lightning->global_lightness = g_value_get_float (value);
       break;
-    case PROP_ZONE_IMMERSION_LEVEL:
-      dlb_lightning_set_immersion_levels (lightning, value);
+    case PROP_IMMERSION_LEVEL:
+      lightning->immersion_level = g_value_get_float (value);
       break;
     case PROP_ZONE_LOW_IMMERSION:
       dlb_lightning_set_low_immersion (lightning, value);
+      break;
+    case PROP_ZONE_BRIGHTNESS_LEVEL:
+      dlb_lightning_set_brightness_levels (lightning, value);
+      break;
+    case PROP_ZONE_SATURATION_LEVEL:
+      dlb_lightning_set_saturation_levels (lightning, value);
+      break;
+    case PROP_ZONE_SMOOTHING:
+      dlb_lightning_set_smoothing (lightning, value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -249,8 +329,19 @@ dlb_lightning_get_property (GObject * object, guint property_id,
     case PROP_LIGHTNESS:
       g_value_set_float (value, lightning->global_lightness);
       break;
-    case PROP_ZONE_IMMERSION_LEVEL:
+    case PROP_IMMERSION_LEVEL:
+      g_value_set_float (value, lightning->immersion_level);
+      break;
     case PROP_ZONE_LOW_IMMERSION:
+    case PROP_ZONE_BRIGHTNESS_LEVEL:
+    case PROP_ZONE_SATURATION_LEVEL:
+    case PROP_ZONE_SMOOTHING:
+      break;
+    case PROP_MAX_SUPPORTED_PROFILE:
+      g_value_set_uint (value, dlb_lsr_get_max_supported_profile ());
+      break;
+    case PROP_MAX_SUPPORTED_LEVEL:
+      g_value_set_uint (value, dlb_lsr_get_max_supported_level ());
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -318,6 +409,15 @@ dlb_lightning_set_caps (GstBaseTransform * trans, GstCaps * incaps, GstCaps * ou
           GST_ERROR_OBJECT(trans, "Ret %s %s %s", ret_max_num_objs == TRUE ? "TRUE" : "FALSE", ret_color_space == TRUE ? "TRUE" : "FALSE", ret_frame_period == TRUE ? "TRUE" : "FALSE");
           return FALSE;
       }
+
+      gint lscp_profile_val = 0;
+      gint lscp_level_val = 1;
+      gst_structure_get_int (s, "lscp-profile", &lscp_profile_val);
+      gst_structure_get_int (s, "lscp-level", &lscp_level_val);
+      lightning->profile = (guint8) lscp_profile_val;
+      lightning->level = (guint8) lscp_level_val;
+      GST_DEBUG_OBJECT (lightning, "lscp-profile %d, lscp-level %d",
+          lightning->profile, lightning->level);
   }
 
   lightning->renderer_config.max_num_md = 1;
@@ -383,7 +483,9 @@ dlb_lightning_transform (GstBaseTransform * trans, GstBuffer * inbuf,
 
   gst_buffer_map (outbuf, &outbuf_map, GST_MAP_READWRITE);
   gsize outsize = outbuf_map.size;
-  dlb_lsr_process (lightning->renderer_instance, inbuf_map.size, inbuf_map.data, &outsize, outbuf_map.data, lightning->a_zone_immersion_levels, lightning->a_zone_low_immersion, lightning->global_lightness);
+  dlb_lsr_process (lightning->renderer_instance, inbuf_map.size, inbuf_map.data, &outsize, outbuf_map.data,
+                   lightning->global_lightness, lightning->immersion_level, lightning->a_zone_low_immersion, lightning->a_zone_brightness_level, lightning->a_zone_saturation_level, lightning->a_zone_smoothing);
+
   GST_DEBUG_OBJECT(lightning, "Output buffer size %ld", outsize);
 
   gst_buffer_resize (outbuf, 0, outsize);
@@ -474,8 +576,8 @@ lightning_restart (DlbLightning * lightning)
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
-  #ifdef DLB_LIGHTNING_OPEN_DYNLIB
-  if (dlb_lightning_try_open_dynlib ())
+  #ifdef DLB_LIGHTSCAPES_OPEN_DYNLIB
+  if (dlb_lightscapes_try_open_dynlib ())
     return FALSE;
   #endif
 

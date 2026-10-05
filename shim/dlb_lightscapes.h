@@ -1,7 +1,7 @@
 /*******************************************************************************
 
- * Dolby Lightscapes GStreamer Plugins
- * Copyright (C) 2024, Dolby Laboratories
+ * Lightscapes GStreamer Plugins
+ * Copyright (C) 2024-2026, Dolby Laboratories
 
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -53,11 +53,17 @@ void        dlb_lsr_process             (dlb_lsr  *self
                                         ,unsigned char *inbuf
                                         ,size_t *outbuf_size
                                         ,unsigned char *outbuf
-                                        ,float *a_zone_immersion_levels
+                                        ,float global_lightness
+                                        ,float immersion_level
                                         ,int *a_zone_low_immersion
-                                        ,float global_lightness);
+                                        ,float *a_zone_brightness_level
+                                        ,float *a_zone_saturation_level
+                                        ,float *a_zone_smoothing);
 void        dlb_lsr_reset               (dlb_lsr *self);
 
 size_t      dlb_lsr_get_max_output_size (dlb_lsr *self);
+
+uint8_t     dlb_lsr_get_max_supported_profile (void);
+uint8_t     dlb_lsr_get_max_supported_level   (void);
 
 #endif // DLB_LIGHTSCAPES_H_
